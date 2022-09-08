@@ -3,6 +3,7 @@ package hotstuff
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
@@ -76,10 +77,10 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 		hs.processCertificate(block.QC)
 	}
 	curView = hs.pm.GetCurView()
-	if block.View < curView {
-		log.Warningf("[%v] received a stale proposal from %v", hs.ID(), block.Proposer)
-		return nil
-	}
+	// if block.View < curView {
+	// 	log.Warningf("[%v] received a stale proposal from %v", hs.ID(), block.Proposer)
+	// 	return nil
+	// }
 	if !hs.Election.IsLeader(block.Proposer, block.View) {
 		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
 	}
@@ -169,30 +170,56 @@ func (hs *HotStuff) ProcessLocalTmo(view types.View) {
 }
 
 func (hs *HotStuff) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
-	qc := hs.forkChoice()
-	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, hs.ID())
+	qc, forkNum := hs.forkChoice()
+	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, hs.ID(), hs.IsByz(), forkNum)
+	if hs.IsByz() {
+		time.Sleep(time.Duration(0.3*float64(config.GetConfig().Timeout)) * time.Millisecond)
+	}
 	return block
 }
 
-func (hs *HotStuff) forkChoice() *blockchain.QC {
-	var choice *blockchain.QC
-	if !hs.IsByz() || config.GetConfig().Strategy != FORK {
-		return hs.GetHighQC()
+func (hs *HotStuff) forkChoice() (*blockchain.QC, int) {
+	// var choice *blockchain.QC
+	if !hs.IsByz() {
+		return hs.GetHighQC(), 0
 	}
 	//	create a fork by returning highQC's parent's QC
+	// parBlockID := hs.GetHighQC().BlockID
+	// parBlock, err := hs.bc.GetBlockByID(parBlockID)
+	// if err != nil {
+	// 	log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
+	// }
+	// if parBlock.QC.View < hs.preferredView {
+	// 	choice = hs.GetHighQC()
+	// } else {
+	// 	choice = parBlock.QC
+	// }
+	// // to simulate TC's view
+	// choice.View = hs.pm.GetCurView() - 1
+	return hs.forkRule()
+}
+
+func (hs *HotStuff) forkRule() (*blockchain.QC, int) {
+	var flag int = -1
+
 	parBlockID := hs.GetHighQC().BlockID
 	parBlock, err := hs.bc.GetBlockByID(parBlockID)
-	if err != nil {
-		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
-	}
-	if parBlock.QC.View < hs.preferredView {
-		choice = hs.GetHighQC()
+	var grandpaBlockID crypto.Identifier
+	var grandpaBlock *blockchain.Block
+	if err != nil || parBlock.GetMali() {
+		flag = 0
 	} else {
-		choice = parBlock.QC
+		grandpaBlockID = parBlock.QC.BlockID
+		grandpaBlock, err = hs.bc.GetBlockByID(grandpaBlockID)
 	}
-	// to simulate TC's view
-	choice.View = hs.pm.GetCurView() - 1
-	return choice
+	if flag == -1 && err == nil && !grandpaBlock.GetMali() {
+		flag = 2
+	}
+	if flag == -1 {
+		flag = 1
+	}
+
+	return hs.GetHighQC(), flag
 }
 
 func (hs *HotStuff) processTC(tc *pacemaker.TC) {
@@ -268,16 +295,16 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 }
 
 func (hs *HotStuff) votingRule(block *blockchain.Block) (bool, error) {
-	if block.View <= 2 {
-		return true, nil
-	}
-	parentBlock, err := hs.bc.GetParentBlock(block.ID)
-	if err != nil {
-		return false, fmt.Errorf("cannot vote for block: %w", err)
-	}
-	if (block.View <= hs.lastVotedView) || (parentBlock.View < hs.preferredView) {
-		return false, nil
-	}
+	// if block.View <= 2 {
+	// 	return true, nil
+	// }
+	// parentBlock, err := hs.bc.GetParentBlock(block.ID)
+	// if err != nil {
+	// 	return false, fmt.Errorf("cannot vote for block: %w", err)
+	// }
+	// if (block.View <= hs.lastVotedView) || (parentBlock.View < hs.preferredView) {
+	// 	return false, nil
+	// }
 	return true, nil
 }
 
